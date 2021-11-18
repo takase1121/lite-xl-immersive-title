@@ -46,6 +46,7 @@ local function init()
         lock = false
         break
       end
+      coroutine.yield()
     end
   end)
   
@@ -57,4 +58,3 @@ local function init()
 end
 
 init()
-return init
