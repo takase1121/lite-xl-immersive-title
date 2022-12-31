@@ -10,7 +10,7 @@ config.plugins.immersive_title = {
 math.randomseed(os.time())
 
 local lock = false
-local last_window_title
+local last_window_title = ""
 local system_set_window_title = system.set_window_title
 function system.set_window_title(title)
   last_window_title = title
@@ -20,7 +20,7 @@ function system.set_window_title(title)
 end
 
 local function init()
-  local name = string.format("LITE_XL_%08x_%08x", system.get_time(), math.random() * 0xFFFFFFFF)
+  local name = string.format("LITE_XL_%08x_%08x", system.get_time() // 1, math.random() * 0xFFFFFFFF // 1)
   lock = true
   system_set_window_title(name)
   local proc = assert(process.start({
