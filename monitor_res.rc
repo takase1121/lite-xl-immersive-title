@@ -1,2 +1,2 @@
 #include <windows.h>
-1 RT_MANIFEST monitor.manifest
+1 RT_MANIFEST "monitor.manifest"
