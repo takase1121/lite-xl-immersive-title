@@ -1,0 +1,28 @@
+name: Build
+on: [push]
+
+jobs:
+  build:
+    name: Build monitor
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v2
+
+      - uses: microsoft/setup-msbuild@v1.1
+
+      - name: Configure
+        run: |
+          mkdir build
+          cmake -B build
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Package
+        run: cmake --install build --prefix immersive-title
+
+      - uses: actions/upload-artifact@v3
+        with:
+          name: immersive-title
+          path: immersive-title
+
