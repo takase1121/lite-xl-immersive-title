@@ -1,6 +1,15 @@
+#ifndef _CRT_SECURE_NO_WARNINGS
+#define _CRT_SECURE_NO_WARNINGS
+#endif
+
 #include <stdio.h>
 #include <windows.h>
 #include <dwmapi.h>
+
+
+#ifdef ENABLE_ACCENT_REPORT
+#include "winrt_ui_settings.h"
+#endif
 
 
 // definitions for DwmSetWindowAttribute
@@ -30,7 +39,9 @@ uintptr_t _beginthreadex( // NATIVE CODE
 #define MAX_CLASS_SIZE 512
 #define BUFFER_SIZE 512
 #define CMD_CONFIG "config"
+#define CMD_THEME "theme"
 #define CMD_EXIT "exit"
+#define CMD_ACCENT "accent"
 
 #define WIN10_BUILD_NUMBER 18362
 #define WIN11_BUILD_NUMBER 22000
@@ -56,6 +67,9 @@ typedef struct window_config_s {
     DWORD pid;
     HWND window;
     HKEY regkey;
+#ifdef ENABLE_ACCENT_REPORT
+    winrt_ui_settings_t *ui_settings;
+#endif
     int dark_mode, extend_border;
     window_backdrop_e backdrop_type;
     config_changed_e mask;
@@ -65,7 +79,9 @@ typedef struct window_config_s {
 } window_config_t;
 
 
-#define log_status(fmt, ...) (printf("status " fmt "\n", __VA_ARGS__))
+#define log_ready() (printf("ready\n"))
+#define log_response(cmd, fmt, ...) (printf(cmd " " fmt "\n", __VA_ARGS__))
+#define log_theme(fmt, ...) (printf("themechange " fmt "\n", __VA_ARGS__))
 #define log_error(fmt, ...) (printf("error " fmt "\n", __VA_ARGS__))
 
 
@@ -162,7 +178,7 @@ static unsigned __stdcall theme_monitor_proc(void *ud) {
         if (value != config->dark_mode) {
             config->dark_mode = value;
             config->mask |= CONFIG_DARK_MODE;
-            log_status("dark %d", config->dark_mode);
+            log_theme("%d", config->dark_mode);
             WakeConditionVariable(&config->config_changed);
         }
 
@@ -286,8 +302,8 @@ static unsigned __stdcall read_input_proc(void *ud) {
         if (strncmp(buffer, CMD_CONFIG, sizeof(CMD_CONFIG) - 1) == 0) {
             int value;
 
-            if (strlen(buffer) < sizeof(CMD_CONFIG) + 3) { // "config <extend><backdrop_type>"
-                log_error("invalid parameters: %s", buffer);
+            if (strlen(buffer) != sizeof(CMD_CONFIG) + 3) { // "config <extend><backdrop_type>"
+                log_error("invalid command: %s", buffer);
                 continue;
             }
             
@@ -310,6 +326,44 @@ static unsigned __stdcall read_input_proc(void *ud) {
 
             WakeConditionVariable(&config->config_changed);
             LeaveCriticalSection(&config->mutex);
+        } else if (strncmp(buffer, CMD_THEME, sizeof(CMD_THEME) - 1) == 0) {
+            int value;
+            LRESULT rc;
+            EnterCriticalSection(&config->mutex);
+            rc = is_dark_mode(config->regkey, &value);
+            if (rc != ERROR_SUCCESS) {
+                log_win32_error("is_dark_mode", rc);
+                LeaveCriticalSection(&config->mutex);
+                break;
+            }
+            log_response(CMD_THEME, "%d", value);
+            LeaveCriticalSection(&config->mutex);
+#ifdef ENABLE_ACCENT_REPORT
+        } else if (strncmp(buffer, CMD_ACCENT, sizeof(CMD_ACCENT) - 1) == 0) {
+            int type;
+            HRESULT hr;
+            uint32_t value = 0;
+
+            if (strlen(buffer) != sizeof(CMD_ACCENT) + 2) {
+                log_error("invalid command: %s", buffer);
+                continue;
+            }
+
+            type = buffer[sizeof(CMD_ACCENT)] - '0';
+            if (type > COLOR_TYPE_MIN && type < COLOR_TYPE_MAX) {
+                EnterCriticalSection(&config->mutex);
+                hr = winrt_ui_settings_get_color(config->ui_settings, type, &value);
+                if (FAILED(hr)) {
+                    log_win32_error("winrt_ui_settings_get_color", HRESULT_CODE(hr));
+                    LeaveCriticalSection(&config->mutex);
+                    break;
+                }
+                log_response(CMD_ACCENT, "%d %u", type, value);
+                LeaveCriticalSection(&config->mutex);
+            } else {
+                log_error("invalid parameter: %c", buffer[sizeof(CMD_ACCENT)]);
+            }
+#endif
         } else if (strncmp(buffer, CMD_EXIT, sizeof(CMD_EXIT) - 1) == 0) {
             break;
         } else {
@@ -320,7 +374,7 @@ static unsigned __stdcall read_input_proc(void *ud) {
 }
 
 
-CALLBACK BOOL enum_window_proc(HWND hwnd, LPARAM lparam) {  
+BOOL CALLBACK enum_window_proc(HWND hwnd, LPARAM lparam) {  
     DWORD pid;
     char buffer[MAX_CLASS_SIZE];
     window_config_t *target = (window_config_t *) lparam;
@@ -340,7 +394,14 @@ int main(int argc, char **argv) {
     window_config_t config = { 0 };
     HANDLE thread_handles[3] = { INVALID_HANDLE_VALUE };
 
-    char buffer[BUFFER_SIZE];
+#ifdef ENABLE_ACCENT_REPORT
+    HRESULT hr;
+    hr = winrt_initialize();
+    if (FAILED(hr)) {
+        log_win32_error("winrt_initialize", HRESULT_CODE(hr));
+        return 0;
+    }
+#endif
 
     if (argc != 3) {
         log_error("invalid number of arguments: %d", argc);
@@ -352,6 +413,13 @@ int main(int argc, char **argv) {
     snprintf(config.class, MAX_CLASS_SIZE, "%s", argv[2]);
     InitializeCriticalSection(&config.mutex);
     InitializeConditionVariable(&config.config_changed);
+#ifdef ENABLE_ACCENT_REPORT
+    hr = winrt_ui_settings_new(&config.ui_settings);
+    if (FAILED(hr)) {
+        log_win32_error("winrt_ui_settings_new", HRESULT_CODE(hr));
+        goto exit;
+    }
+#endif
     if (!EnumWindows(&enum_window_proc,(LPARAM) &config) && GetLastError() != ERROR_SUCCESS) {
         log_win32_error("EnumWindows", GetLastError());
         goto exit;
@@ -390,7 +458,7 @@ int main(int argc, char **argv) {
         }
     }
 
-    log_status("ready%s", "");
+    log_ready();
 
     rc = WaitForMultipleObjects(sizeof(thread_handles) / sizeof(*thread_handles),
                                 thread_handles,
@@ -426,5 +494,10 @@ exit:
     if (config.regkey)
         RegCloseKey(config.regkey);
     DeleteCriticalSection(&config.mutex);
+#ifdef ENABLE_ACCENT_REPORT
+    if (config.ui_settings)
+        winrt_ui_settings_free(config.ui_settings);
+    winrt_deinitialize();
+#endif
     return 0;
 }
