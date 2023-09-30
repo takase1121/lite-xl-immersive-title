@@ -1,75 +1,60 @@
 -- mod-version:3
 local core = require "core"
-local common = require "core.common"
 local config = require "core.config"
-local Object = require "core.object"
 local process = require "process"
 
-config.plugins.immersive_title = common.merge(config.plugins.immersive_title, {
-  -- extend window frame into client area
-  extend_frame = true,
-  -- the backdrop type
-  backdrop_type = "mica",
-  -- changes theme based on Windows settings
-  adaptive_theme = true,
-  -- default dark theme
-  theme_dark = "colors.default",
-  -- default light theme
-  theme_light = "colors.summer",
+config.plugins.immersive_title = {
+  mica = true
+}
 
-  config_spec = {
-    name = "Mica",
-    {
-      label = "Extend window frame into client area",
-      description = "When enabled, the window frame will be extended into the window, "
-                    .. "applying Mica/Acrylic onto the window itself.",
-      path = "extend_frame",
-      type = "toggle",
-      default = true
-    },
-    {
-      label = "Backdrop type",
-      description = "The type of backdrop for the window frame. "
-                    .. "Only supports Windows 11 build 22621 and above.",
-      path = "backdrop_type",
-      type = "selection",
-      values = {
-        {"Default", "default" },
-        { "None", "none" },
-        { "Mica", "mica" },
-        { "Acrylic", "acrylic" },
-        { "Mica (Tabbed)", "tabbed" }
-      },
-      default = "default",
-    },
-    {
-      label = "Adaptive theming",
-      description = "Changes the theme according to Windows settings.",
-      path = "adaptive_theme",
-      type = "toggle",
-      default = true
-    },
-    {
-      label = "Light theme",
-      description = "The theme to use when Windows is set to use light theme.",
-      path = "theme_light",
-      type = "string",
-      default = "colors.default"
-    },
-    {
-      label = "Dark theme",
-      description = "The theme to use when Windows is set to use dark theme.",
-      path = "theme_dark",
-      type = "string",
-      default = "colors.summer"
-    }
-  }
-})
+math.randomseed(os.time())
 
-local Monitor = Object:extend()
-function Monitor:new()
-  self.proc = assert(process.start())
+local lock = false
+local last_window_title = ""
+local system_set_window_title = system.set_window_title
+function system.set_window_title(title)
+  last_window_title = title
+  if not lock then
+    system_set_window_title(title)
+  end
 end
 
-local function on_change()
+local function init()
+  local name = string.format("LITE_XL_%08x_%08x", system.get_time() // 1, math.random() * 0xFFFFFFFF // 1)
+  lock = true
+  system_set_window_title(name)
+  local proc = assert(process.start({
+    USERDIR .. "/dark_mode_monitor",
+    tostring(config.plugins.immersive_title.mica),
+    name
+  }, {
+    stdout = process.REDIRECT_PIPE,
+    stderr = process.REDIRECT_STDOUT,
+    stdin = process.REDIRECT_DISCARD,
+  }), "cannot start theme monitor")
+  
+  core.add_thread(function()
+    local buf = ""
+    while true do
+      local read = proc:read_stdout()
+      if not read then break end
+    
+      buf = buf .. read
+      if buf:find("found!", 1, true) then
+        core.log_quiet("monitoring theme changes...")
+        system_set_window_title(last_window_title)
+        lock = false
+        break
+      end
+      coroutine.yield()
+    end
+  end)
+  
+  local core_quit = core.quit
+  function core.quit(force)
+    proc:terminate()
+    core_quit(force)
+  end
 end
+
+init()
